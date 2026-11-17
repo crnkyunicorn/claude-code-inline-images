@@ -5,8 +5,14 @@ const MAX_PNG_BYTES = 2 * 1024 * 1024
 // Longest edge in pixels when an image has to be converted or shrunk.
 const MAX_EDGE = 1600
 const MAX_IMAGES_PER_CALL = 4
-const MAX_COLUMNS = 100
-const MAX_ROWS = 40
+// Largest box, in terminal cells, for each thumbnail: images from tool results (indented
+// under the tool call) and images you pasted (under your message).
+// `inRow` lays the images side by side, wrapping to a new row where the terminal ends.
+type Fit = { columns: number; rows: number; indent: number; inRow?: boolean }
+const TOOL_FIT: Fit = { columns: 50, rows: 15, indent: 5, inRow: true }
+const PASTE_FIT: Fit = { columns: 50, rows: 15, indent: 2, inRow: true }
+// Columns between images laid side by side.
+const ROW_GAP = 2
 
 type Found = { base64: string; mime: string }
 type Ready = { png: string; width: number; height: number }
@@ -114,11 +120,14 @@ async function prepare($: EngineInterface, found: Found): Promise<Ready> {
   return { png: out, ...converted }
 }
 
-function load($: EngineInterface, cache: Map<string, Entry>, id: string, found: Found[]) {
-  cache.set(id, { state: 'pending' })
+// Converts found images in the background, filing the result under every key given.
+function load($: EngineInterface, cache: Map<string, Entry>, keys: string | string[], found: Found[]) {
+  const ids = typeof keys === 'string' ? [keys] : keys
+  const put = (entry: Entry) => ids.forEach(id => cache.set(id, entry))
+  put({ state: 'pending' })
   void Promise.all(found.map(f => prepare($, f)))
-    .then(images => cache.set(id, { state: 'ready', images }))
-    .catch((err: unknown) => cache.set(id, { state: 'failed', reason: err instanceof Error ? err.message : String(err) }))
+    .then(images => put({ state: 'ready', images }))
+    .catch((err: unknown) => put({ state: 'failed', reason: err instanceof Error ? err.message : String(err) }))
     .finally(() => $.ui.invalidate('ui.render'))
 }
 
@@ -132,6 +141,7 @@ function imagesFor(
   id: string,
   output: unknown,
   termCols: number,
+  fit: Fit = TOOL_FIT,
 ) {
   let entry = cache.get(id)
   if (!entry) {
@@ -149,31 +159,115 @@ function imagesFor(
     return <Text key={`${id}-status`} dimColor>  ⎿ image not shown: {entry.reason}</Text>
   }
 
-  const maxCols = Math.max(10, Math.min(MAX_COLUMNS, termCols - 6))
-  return entry.images.map((img, i) => {
+  const maxCols = Math.max(10, Math.min(fit.columns, termCols - 6))
+  const sized = entry.images.map(img => {
     // Terminal cells are about twice as tall as they are wide.
     let columns = Math.min(maxCols, Math.max(1, Math.round(img.width / 8)))
     let rows = Math.round((columns * img.height) / img.width / 2)
-    if (rows > MAX_ROWS) {
-      rows = MAX_ROWS
+    if (rows > fit.rows) {
+      rows = fit.rows
       columns = Math.max(1, Math.round((rows * 2 * img.width) / img.height))
     }
-    return (
-      <Box key={`${id}-box-${i}`} paddingLeft={5}>
-        <Image
-          key={`${id}-img-${i}`}
-          source={{ png: img.png }}
-          columns={columns}
-          rows={Math.max(1, rows)}
-          alt={`[image ${img.width}×${img.height}]`}
-        />
-      </Box>
-    )
+    return { img, columns, rows: Math.max(1, rows) }
   })
+  const picture = ({ img, columns, rows }: (typeof sized)[number], i: number) => (
+    <Image
+      key={`${id}-img-${i}`}
+      source={{ png: img.png }}
+      columns={columns}
+      rows={rows}
+      alt={`[image ${img.width}×${img.height}]`}
+    />
+  )
+
+  if (!fit.inRow) {
+    return sized.map((s, i) => (
+      <Box key={`${id}-box-${i}`} paddingLeft={fit.indent}>
+        {picture(s, i)}
+      </Box>
+    ))
+  }
+
+  // Side by side: as many per row as the terminal's width allows.
+  const room = termCols - fit.indent - 2
+  const lines: { s: (typeof sized)[number]; i: number }[][] = [[]]
+  let used = 0
+  sized.forEach((s, i) => {
+    const line = lines[lines.length - 1]!
+    const need = (line.length > 0 ? ROW_GAP : 0) + s.columns
+    if (line.length > 0 && used + need > room) {
+      lines.push([{ s, i }])
+      used = s.columns
+    } else {
+      line.push({ s, i })
+      used += need
+    }
+  })
+  return lines.map((line, r) => (
+    <Box key={`${id}-row-${r}`} flexDirection="row" paddingLeft={fit.indent} gap={ROW_GAP}>
+      {line.map(({ s, i }) => picture(s, i))}
+    </Box>
+  ))
+}
+
+// Mods get no message id, so a pasted image is tied to its message by the text. The exact
+// text comes first (its [Image #N] chips number up through the session, so they tell
+// image-only messages apart); the text without chips is the fallback, in case the row
+// and the submission spell the chips differently.
+function exactKey(text: string): string {
+  return 'paste=' + text.trim()
+}
+function looseKey(text: string): string {
+  return 'paste~' + text.replace(/\[Image #\d+\]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+// Reads one attachment of the prompt being submitted, joining the engine's 4 MiB slices.
+async function readMedia($: EngineInterface, id: string): Promise<Found | undefined> {
+  let base64 = '', mime = '', offset: number | undefined
+  do {
+    const media = await $.prompt.media(offset === undefined ? { id } : { id, offset })
+    if (media.base64 === undefined || media.type !== 'image') return undefined
+    base64 += media.base64
+    mime = media.mediaType
+    offset = media.next
+  } while (offset !== undefined)
+  return { base64, mime }
 }
 
 export const register: Register = on => {
   const cache = new Map<string, Entry>()
+
+  // A prompt with pasted images: read their bytes while the submission is in flight,
+  // then convert them in the background so sending isn't held up.
+  on('prompt.submit', async ($, e, next) => {
+    const ids = (e.attachments ?? []).filter(a => a.type === 'image' && a.id).map(a => a.id!)
+    if (ids.length > 0) {
+      try {
+        const found: Found[] = []
+        for (const id of ids.slice(0, MAX_IMAGES_PER_CALL)) {
+          const image = await readMedia($, id)
+          if (image) found.push(image)
+        }
+        if (found.length > 0) load($, cache, [exactKey(e.text), looseKey(e.text)], found)
+      } catch {
+        // Never block a prompt over a thumbnail.
+      }
+    }
+    return next(e)
+  })
+
+  // Your message in the transcript: draw its pasted images under it.
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    const row = await next(e)
+    if (e.surface !== 'terminal') return row
+    const exact = exactKey(e.props.text)
+    const key = cache.has(exact) ? exact : looseKey(e.props.text)
+    if (!cache.has(key)) return row
+    const extra = imagesFor($, $.ui.resolve(e), cache, key, undefined, e.viewport?.columns ?? 80, PASTE_FIT)
+    if (extra === null) return row
+    const { Box } = $.ui.resolve(e)
+    return <Box flexDirection="column">{row}{extra}</Box>
+  })
 
   // A tool call drawn as its own row.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
@@ -190,13 +284,27 @@ export const register: Register = on => {
     const row = await next(e)
     if (e.surface !== 'terminal' || e.props.isExpanded) return row
     const ui = $.ui.resolve(e)
+    const cols = e.viewport?.columns ?? 80
+    const withImages: string[] = []
     const extras = e.props.calls.flatMap((call, i) => {
       if (call.isRunning || call.output === undefined) return []
-      const found = imagesFor($, ui, cache, call.tool_use_id ?? `group-${i}-${call.tool}`, call.output, e.viewport?.columns ?? 80)
-      return found === null ? [] : [found].flat()
+      const id = call.tool_use_id ?? `group-${i}-${call.tool}`
+      const found = imagesFor($, ui, cache, id, call.output, cols)
+      if (found === null) return []
+      withImages.push(id)
+      return [found].flat()
     })
     if (extras.length === 0) return row
     const { Box } = ui
+
+    // Once every call's images are ready, lay them all in one row instead of a row per call.
+    const entries = withImages.map(id => cache.get(id))
+    if (withImages.length > 1 && entries.every(en => en?.state === 'ready')) {
+      const images = entries.flatMap(en => (en?.state === 'ready' ? en.images : []))
+      const key = `group:${withImages.join('|')}`
+      cache.set(key, { state: 'ready', images })
+      return <Box flexDirection="column">{row}{imagesFor($, ui, cache, key, undefined, cols)}</Box>
+    }
     return <Box flexDirection="column">{row}{extras}</Box>
   })
 }

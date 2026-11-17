@@ -26,7 +26,7 @@ In the desktop app, where `/plugin` doesn't run: click **+** next to the prompt 
 
 - **Where images appear:** under any finished tool call whose output contains an image, including Read results folded into a "Read N files" row.
 - **Image formats it finds:** Read tool images, MCP image results, and API-style image blocks.
-- **Size:** each image is scaled to fit the terminal, at most 100 columns wide and 40 rows tall. It shows up to 4 images per tool call.
+- **Size:** each image is a thumbnail at most 50 columns wide and 15 rows tall. Several images from one tool call, one folded "Read N files" row, or one message sit side by side, wrapping to a new row where the terminal ends. It shows up to 4 images per tool call or message.
 - **PNGs** up to 2 MB are drawn directly.
 - **Other formats** (JPEG, GIF, WebP, …) and large PNGs are converted to a PNG at most 1600px on the longest edge. Conversion uses the first of these that's available:
   1. Python with [Pillow](https://pypi.org/project/pillow/) (`pip install pillow`)
