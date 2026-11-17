@@ -1,1 +1,1 @@
-{"name": "inline-images", "version": "0.2.1", "description": "Draws thumbnails of images inline in the terminal transcript: images you paste into the prompt, and images from tool results (screenshots, image reads)"}
+{"name": "inline-images", "version": "0.3.0", "description": "Draws thumbnails of images inline in the terminal transcript: images you paste into the prompt, and images from tool results (screenshots, image reads)", "types": "./types/index.d.ts"}

@@ -1,4 +1,7 @@
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
+
+import type { Viewing } from '../types'
 
 // Largest decoded PNG an <Image> accepts from bytes.
 const MAX_PNG_BYTES = 2 * 1024 * 1024
@@ -13,6 +16,18 @@ const TOOL_FIT: Fit = { columns: 50, rows: 15, indent: 5, inRow: true }
 const PASTE_FIT: Fit = { columns: 50, rows: 15, indent: 2, inRow: true }
 // Columns between images laid side by side.
 const ROW_GAP = 2
+
+// The side pane that shows one image large, and which image it shows. Only the choice is
+// kept in session state; the images stay in the module's memory, so a reload empties them.
+const VIEWER = 'inline-images-viewer'
+const NONE: Viewing = { key: '', index: 0 }
+// Change the tag when Viewing's fields change: it declines what an earlier version stored.
+const viewing = atom({ plugin: 'inline-images', key: 'viewing' } as const, NONE, { shape: 'viewing-1' })
+
+async function openViewer($: EngineInterface, key: string, index: number) {
+  await update($, viewing, () => ({ key, index }))
+  await $.ui.open({ id: VIEWER, title: 'Image', focus: true, closeOnEscape: true })
+}
 
 type Found = { base64: string; mime: string }
 type Ready = { png: string; width: number; height: number }
@@ -151,7 +166,7 @@ function imagesFor(
     entry = cache.get(id)!
   }
 
-  const { Box, Text, Image } = ui as any
+  const { Box, Text, Image, Button } = ui as any
   if (entry.state === 'pending') {
     return <Text key={`${id}-status`} dimColor>  ⎿ loading image…</Text>
   }
@@ -180,12 +195,23 @@ function imagesFor(
     />
   )
 
+  const viewButton = (
+    <Box key={`${id}-view-row`} paddingLeft={fit.indent}>
+      <Button key={`${id}-view`} onPress={() => void openViewer($, id, 0)}>
+        {sized.length > 1 ? `⤢ view (${sized.length})` : '⤢ view'}
+      </Button>
+    </Box>
+  )
+
   if (!fit.inRow) {
-    return sized.map((s, i) => (
-      <Box key={`${id}-box-${i}`} paddingLeft={fit.indent}>
-        {picture(s, i)}
-      </Box>
-    ))
+    return [
+      ...sized.map((s, i) => (
+        <Box key={`${id}-box-${i}`} paddingLeft={fit.indent}>
+          {picture(s, i)}
+        </Box>
+      )),
+      viewButton,
+    ]
   }
 
   // Side by side: as many per row as the terminal's width allows.
@@ -203,11 +229,14 @@ function imagesFor(
       used += need
     }
   })
-  return lines.map((line, r) => (
-    <Box key={`${id}-row-${r}`} flexDirection="row" paddingLeft={fit.indent} gap={ROW_GAP}>
-      {line.map(({ s, i }) => picture(s, i))}
-    </Box>
-  ))
+  return [
+    ...lines.map((line, r) => (
+      <Box key={`${id}-row-${r}`} flexDirection="row" paddingLeft={fit.indent} gap={ROW_GAP}>
+        {line.map(({ s, i }) => picture(s, i))}
+      </Box>
+    )),
+    viewButton,
+  ]
 }
 
 // Mods get no message id, so a pasted image is tied to its message by the text. The exact
@@ -236,6 +265,64 @@ async function readMedia($: EngineInterface, id: string): Promise<Found | undefi
 
 export const register: Register = on => {
   const cache = new Map<string, Entry>()
+
+  // The viewer pane: the chosen image as large as the pane allows, with prev / next / close.
+  on('ui.render', { component: 'Pane', requestId: VIEWER }, async ($, e) => {
+    const { Box, Text, Button, Image } = $.ui.resolve(e) as any
+    const close = <Button key="close" onPress={() => void $.ui.close({ id: VIEWER })}>✕ close</Button>
+    const v = await read($, viewing)
+    const entry = v.key ? cache.get(v.key) : undefined
+    if (!entry || entry.state !== 'ready' || entry.images.length === 0) {
+      const why = v.key ? 'That image is no longer loaded (the mod was reloaded).' : 'No image selected.'
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text dimColor>{why}</Text>
+          {close}
+        </Box>
+      )
+    }
+
+    const count = entry.images.length
+    const index = Math.min(Math.max(0, v.index), count - 1)
+    const img = entry.images[index]!
+    const step = (by: number) => () =>
+      void update($, viewing, cur => ({ ...cur, index: (cur.index + by + count) % count }))
+
+    // Fit the picture to the pane, keeping its shape (cells are about twice as tall as wide).
+    const maxCols = Math.max(10, e.props.bodyColumns - 1)
+    const maxRows = Math.max(4, e.props.scroll.bodyRows - 3)
+    let columns = maxCols
+    let rows = Math.round((columns * img.height) / img.width / 2)
+    if (rows > maxRows) {
+      rows = maxRows
+      columns = Math.max(1, Math.round((rows * 2 * img.width) / img.height))
+    }
+
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Box flexDirection="row" gap={2}>
+          {count > 1 && <Button key="prev" hotkey="p" onPress={step(-1)}>‹ prev</Button>}
+          {count > 1 && <Button key="next" hotkey="n" onPress={step(1)}>next ›</Button>}
+          {close}
+          <Text dimColor>
+            {count > 1 ? `${index + 1} of ${count} · ` : ''}
+            {img.width}×{img.height}
+          </Text>
+        </Box>
+        {e.surface === 'terminal' ? (
+          <Image
+            key="viewer-image"
+            source={{ png: img.png }}
+            columns={columns}
+            rows={Math.max(1, rows)}
+            alt={`[image ${img.width}×${img.height}]`}
+          />
+        ) : (
+          <Text dimColor>Images show in the terminal only.</Text>
+        )}
+      </Box>
+    )
+  })
 
   // A prompt with pasted images: read their bytes while the submission is in flight,
   // then convert them in the background so sending isn't held up.

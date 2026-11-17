@@ -24,9 +24,11 @@ In the desktop app, where `/plugin` doesn't run: click **+** next to the prompt 
 
 ## What it does
 
-- **Where images appear:** under any finished tool call whose output contains an image, including Read results folded into a "Read N files" row.
+- **Where images appear:** under your message for images you paste into the prompt, and under any finished tool call whose output contains an image, including Read results folded into a "Read N files" row. Pasted images get thumbnails once you send the message, not while they sit in the prompt box.
 - **Image formats it finds:** Read tool images, MCP image results, and API-style image blocks.
 - **Size:** each image is a thumbnail at most 50 columns wide and 15 rows tall. Several images from one tool call, one folded "Read N files" row, or one message sit side by side, wrapping to a new row where the terminal ends. It shows up to 4 images per tool call or message.
+- **Viewing an image large:** click `⤢ view` under the thumbnails to open a side pane beside the transcript, showing the image as large as the pane allows. With several images, `‹ prev` / `next ›` (or `p` / `n` while the pane has the keyboard) step through them. `✕ close` or Esc closes the pane.
+- **Kept in memory:** thumbnails and the images the pane shows are held for the session only. Reloading plugins or restarting Claude Code clears the ones already drawn.
 - **PNGs** up to 2 MB are drawn directly.
 - **Other formats** (JPEG, GIF, WebP, …) and large PNGs are converted to a PNG at most 1600px on the longest edge. Conversion uses the first of these that's available:
   1. Python with [Pillow](https://pypi.org/project/pillow/) (`pip install pillow`)
@@ -47,4 +49,6 @@ In the desktop app, where `/plugin` doesn't run: click **+** next to the prompt 
 .claude-plugin/marketplace.json   makes this repo installable with /plugin install
 hooks/hooks.json                  points Claude Code at the hooks module
 hooks/register.tsx                the mod
+types/index.d.ts                  the mod's state contract (which image the pane shows)
+tests/paste.test.tsx              tests, run with `claude plugin test .`
 ```
