@@ -1,0 +1,5 @@
+{
+  "name": "claude-code-inline-images",
+  "owner": { "name": "crnkyunicorn" },
+  "plugins": [{ "name": "inline-images", "source": "./" }]
+}
