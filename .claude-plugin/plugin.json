@@ -1,1 +1,1 @@
-{ "name": "inline-images", "version": "0.1.0", "description": "Draws images from tool results (screenshots, image reads) inline in the terminal transcript" }
+{ "name": "inline-images", "version": "0.2.0", "description": "Draws images from tool results (screenshots, image reads) inline in the terminal transcript" }
