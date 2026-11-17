@@ -1,8 +1,8 @@
 # inline-images
 
-A Claude Code mod that draws images from tool results inline in the terminal transcript. This covers screenshots, images Claude reads with the Read tool, and images returned by MCP tools.
+A Claude Code mod that draws thumbnails of images inline in the terminal transcript. This covers images you paste into the prompt, and images from tool results: screenshots, images Claude reads with the Read tool, and images returned by MCP tools.
 
-Without it, a tool result that holds an image appears in the transcript as a line of text. With it, you see the image itself, under the tool call that produced it.
+Without it, a pasted image appears as an `[Image #N]` label and a tool result that holds an image appears as a line of text. With it, you see a thumbnail of the image: under your message for a pasted image, or under the tool call that produced it.
 
 ## Install
 
